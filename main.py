@@ -1,3 +1,13 @@
+import sys
+
+# Update this path to the exact name of your uploaded utility dataset
+UTILITY_DATASET_PATH = '/kaggle/input/datasets/michaelnabil88/vasnet-utils'
+sys.path.append(UTILITY_DATASET_PATH)
+
+print("Utility files linked successfully.")
+
+# ==================================================================================
+
 __author__ = 'Jiri Fajtl'
 __email__ = 'ok1zjf@gmail.com'
 __version__= '3.6'
@@ -116,9 +126,9 @@ class AONet:
 
             # Hardcode the mapping to the generated CLIP features
             if 'tvsum' in base_filename.lower():
-                clip_datasets_dict[base_filename] = h5py.File('/kaggle/working/clip_features/tvsum_clip_features.h5', 'r')
+                clip_datasets_dict[base_filename] = h5py.File('/kaggle/input/datasets/michaelnabil88/tvsum-and-summe-feature-extraction-using-clip/tvsum_clip_features.h5', 'r')
             elif 'summe' in base_filename.lower():
-                clip_datasets_dict[base_filename] = h5py.File('/kaggle/working/clip_features/summe_clip_features.h5', 'r')
+                clip_datasets_dict[base_filename] = h5py.File('/kaggle/input/datasets/michaelnabil88/tvsum-and-summe-feature-extraction-using-clip/summe_clip_features.h5', 'r')
             
         self.datasets = datasets_dict
         self.clip_datasets = clip_datasets_dict # Create a new attribute for the CLIP features
@@ -250,7 +260,17 @@ class AONet:
                 # Normalize frame scores
                 target -= target.min()
                 target /= target.max()
-
+                # ==========================================
+                # FIX 1: TEMPORAL INTERPOLATION (ALIGNMENT)
+                # ==========================================
+                if seq.shape[1] != target.shape[1]:
+                    # Transpose to [batch, channels, seq_len] for interpolation
+                    seq = seq.transpose(1, 2)
+                    # Stretch/squash the time dimension to match the target
+                    seq = F.interpolate(seq, size=target.shape[1], mode='linear', align_corners=False)
+                    # Transpose back to [batch, seq_len, channels]
+                    seq = seq.transpose(1, 2)
+                # ==========================================
                 if self.hps.use_cuda:
                     seq, target = seq.float().cuda(), target.float().cuda()
 
@@ -306,7 +326,18 @@ class AONet:
 
                 if self.hps.use_cuda:
                     seq = seq.float().cuda()
-
+                # ==========================================
+                # FIX 2: TEMPORAL INTERPOLATION FOR EVAL
+                # ==========================================
+                
+                # We need the target length to know how much to stretch/squash
+                target_len = data['gtscore'][...].shape[0]
+                
+                if seq.shape[1] != target_len:
+                    seq = seq.transpose(1, 2)
+                    seq = F.interpolate(seq, size=target_len, mode='linear', align_corners=False)
+                    seq = seq.transpose(1, 2)
+                # ==========================================
                 y, att_vec = self.model(seq, seq.shape[1])
                 summary[key] = y[0].detach().cpu().numpy()
                 att_vecs[key] = att_vec.detach().cpu().numpy()
