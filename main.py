@@ -115,7 +115,6 @@ class AONet:
             datasets = self.hps.datasets
 
         datasets_dict = {}
-        clip_datasets_dict = {} # New dictionary for CLIP features read from it's file
         for dataset in datasets:
             _, base_filename = os.path.split(dataset)
             base_filename, _ = os.path.splitext(base_filename)
@@ -124,14 +123,7 @@ class AONet:
             # print("\tDataset name:", dataset_name)
             datasets_dict[base_filename] = h5py.File(dataset, 'r')
 
-            # Hardcode the mapping to the generated CLIP features
-            if 'tvsum' in base_filename.lower():
-                clip_datasets_dict[base_filename] = h5py.File('/kaggle/input/datasets/michaelnabil88/tvsum-and-summe-feature-extraction-using-clip/tvsum_clip_features.h5', 'r')
-            elif 'summe' in base_filename.lower():
-                clip_datasets_dict[base_filename] = h5py.File('/kaggle/input/datasets/michaelnabil88/tvsum-and-summe-feature-extraction-using-clip/summe_clip_features.h5', 'r')
-            
         self.datasets = datasets_dict
-        self.clip_datasets = clip_datasets_dict # Create a new attribute for the CLIP features
         return datasets_dict
 
 
@@ -199,13 +191,7 @@ class AONet:
         assert len(key_parts) == 2, "ERROR. Wrong key name: "+key
         dataset, key = key_parts
         return self.datasets[dataset][key]
-    
-    # New helper function to get the CLIP features
-    def get_clip_data(self, key):
-        key_parts = key.split('/')
-        dataset, key = key_parts
-        return self.clip_datasets[dataset][key]
-    
+
     def lookup_weights_file(self, data_path):
         dataset_type_str = '' if self.dataset_type == '' else self.dataset_type + '_'
         weights_filename = data_path + '/models/{}_{}splits_{}_*.tar.pth'.format(self.dataset_name, dataset_type_str, self.split_id)
@@ -251,8 +237,7 @@ class AONet:
 
             for i, key in enumerate(train_keys):
                 dataset = self.get_data(key)
-                clip_dataset = self.get_clip_data(key) # loading CLIP features
-                seq = clip_dataset['features'][...] # get the features from clip_dataset
+                seq = dataset['features'][...]
                 seq = torch.from_numpy(seq).unsqueeze(0)
                 target = dataset['gtscore'][...]
                 target = torch.from_numpy(target).unsqueeze(0)
@@ -260,17 +245,7 @@ class AONet:
                 # Normalize frame scores
                 target -= target.min()
                 target /= target.max()
-                # ==========================================
-                # FIX 1: TEMPORAL INTERPOLATION (ALIGNMENT)
-                # ==========================================
-                if seq.shape[1] != target.shape[1]:
-                    # Transpose to [batch, channels, seq_len] for interpolation
-                    seq = seq.transpose(1, 2)
-                    # Stretch/squash the time dimension to match the target
-                    seq = F.interpolate(seq, size=target.shape[1], mode='linear', align_corners=False)
-                    # Transpose back to [batch, seq_len, channels]
-                    seq = seq.transpose(1, 2)
-                # ==========================================
+
                 if self.hps.use_cuda:
                     seq, target = seq.float().cuda(), target.float().cuda()
 
@@ -319,25 +294,13 @@ class AONet:
         with torch.no_grad():
             for i, key in enumerate(keys):
                 data = self.get_data(key)
-                clip_data = self.get_clip_data(key) # loading CLIP features
                 # seq = self.dataset[key]['features'][...]
-                seq = clip_data['features'][...] # get the features from clip_dataset
+                seq = data['features'][...]
                 seq = torch.from_numpy(seq).unsqueeze(0)
 
                 if self.hps.use_cuda:
                     seq = seq.float().cuda()
-                # ==========================================
-                # FIX 2: TEMPORAL INTERPOLATION FOR EVAL
-                # ==========================================
-                
-                # We need the target length to know how much to stretch/squash
-                target_len = data['gtscore'][...].shape[0]
-                
-                if seq.shape[1] != target_len:
-                    seq = seq.transpose(1, 2)
-                    seq = F.interpolate(seq, size=target_len, mode='linear', align_corners=False)
-                    seq = seq.transpose(1, 2)
-                # ==========================================
+
                 y, att_vec = self.model(seq, seq.shape[1])
                 summary[key] = y[0].detach().cpu().numpy()
                 att_vecs[key] = att_vec.detach().cpu().numpy()
